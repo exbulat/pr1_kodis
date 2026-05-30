@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Ассистент совещаний</title>
+<link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<header>
+  <div class="logo">Ассистент совещаний</div>
+  <div class="tabs">
+    <button class="tab active" id="tab-a" onclick="setMode('audio')">Аудио / Видео</button>
+    <button class="tab" id="tab-t" onclick="setMode('text')">Текст</button>
+  </div>
+</header>
+
+<main>
+
+  <div class="upload-wrap" id="upload-wrap">
+    <div class="dropzone" id="dropzone">
+      <input type="file" id="file-input" accept=".mp3,.wav,.mp4,.m4a,.ogg,.webm"/>
+      <div class="dz-icon">🎙</div>
+      <div class="dz-title">Перетащите файл сюда</div>
+      <div class="dz-sub">или <a id="browse">выберите с компьютера</a></div>
+      <div class="dz-formats">MP3 · WAV · MP4 · M4A · OGG · WEBM</div>
+    </div>
+    <div class="file-chosen" id="file-chosen">
+      <span id="fname"></span>
+      <span class="file-rm" id="file-rm">✕</span>
+    </div>
+  </div>
+
+  <div class="text-wrap" id="text-wrap">
+    <textarea id="text-input" placeholder="Вставьте текст совещания..."></textarea>
+  </div>
+
+  <button class="submit" id="submit" disabled>Анализировать</button>
+  <div class="err" id="err"></div>
+
+  <div class="loader" id="loader">
+    <div class="spin">
+      <svg viewBox="0 0 44 44" width="44" height="44" fill="none">
+        <circle cx="22" cy="22" r="18" stroke="#eee" stroke-width="2"/>
+        <circle cx="22" cy="22" r="18" stroke="#111" stroke-width="2"
+          stroke-dasharray="113" stroke-dashoffset="85" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <div class="loader-text" id="loader-text">Обрабатываю</div>
+  </div>
+
+  <div id="result">
+    <div class="res-title" id="r-title"></div>
+    <div class="res-badges" id="r-badges"></div>
+    <button class="dl-btn" id="dl-btn">↓ Скачать протокол</button>
+
+    <div class="sec" id="s-par">
+      <div class="sec-line"></div>
+      <div class="sec-label">Участники</div>
+      <div class="participants" id="r-par"></div>
+    </div>
+    <div class="sec" id="s-sum">
+      <div class="sec-line"></div>
+      <div class="sec-label">Содержание</div>
+      <p class="summary" id="r-sum"></p>
+      <div id="r-next"></div>
+    </div>
+    <div class="sec" id="s-kw">
+      <div class="sec-line"></div>
+      <div class="sec-label">Ключевые темы</div>
+      <div class="kws" id="r-kw"></div>
+    </div>
+    <div class="sec" id="s-dec">
+      <div class="sec-line"></div>
+      <div class="sec-label">Решения</div>
+      <div class="decisions"><ol id="r-dec"></ol></div>
+    </div>
+    <div class="sec" id="s-tasks">
+      <div class="sec-line"></div>
+      <div class="sec-label">Задачи</div>
+      <div class="tasks" id="r-tasks"></div>
+    </div>
+    <div class="sec" id="s-con">
+      <div class="sec-line"></div>
+      <div class="sec-label">Контакты</div>
+      <div class="contacts" id="r-con"></div>
+    </div>
+    <div class="sec" id="s-tr">
+      <div class="sec-line"></div>
+      <button class="tr-toggle" id="tr-toggle">
+        <span class="arr">›</span> Транскрипт
+      </button>
+      <div class="tr-body" id="r-tr"></div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const API = 'http://127.0.0.1:5000';
+let mode = 'audio';
+let currentResult = null;
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('tab-a').classList.toggle('active', m === 'audio');
+  document.getElementById('tab-t').classList.toggle('active', m === 'text');
+  document.getElementById('upload-wrap').style.display = m === 'audio' ? '' : 'none';
+  document.getElementById('text-wrap').classList.toggle('show', m === 'text');
+  refreshBtn();
+}
+
+function refreshBtn() {
+  const btn = document.getElementById('submit');
+  if (mode === 'audio') btn.disabled = !fileInput._file;
+  else btn.disabled = !document.getElementById('text-input').value.trim();
+}
+
+const fileInput = document.getElementById('file-input');
+const dropzone  = document.getElementById('dropzone');
+
+document.getElementById('browse').addEventListener('click', e => { e.stopPropagation(); fileInput.click(); });
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+dropzone.addEventListener('drop', e => { e.preventDefault(); dropzone.classList.remove('drag-over'); const f = e.dataTransfer.files[0]; if (f) attach(f); });
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) attach(fileInput.files[0]); });
+
+function attach(f) {
+  fileInput._file = f;
+  document.getElementById('fname').textContent = f.name;
+  document.getElementById('file-chosen').classList.add('show');
+  refreshBtn();
+}
+document.getElementById('file-rm').addEventListener('click', () => {
+  fileInput.value = ''; fileInput._file = null;
+  document.getElementById('file-chosen').classList.remove('show');
+  refreshBtn();
+});
+document.getElementById('text-input').addEventListener('input', refreshBtn);
+
+document.getElementById('submit').addEventListener('click', async () => {
+  if (mode === 'audio') {
+    const f = fileInput._file; if (!f) return;
+    const fd = new FormData(); fd.append('file', f);
+    await run(() => fetch(`${API}/analyze_audio`, { method:'POST', body: fd }),
+      ['Транскрибирую запись', 'Определяю спикеров', 'Анализирую содержание', 'Формирую протокол']);
+  } else {
+    const text = document.getElementById('text-input').value.trim(); if (!text) return;
+    await run(() => fetch(`${API}/analyze_text`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text}) }),
+      ['Анализирую текст', 'Формирую протокол']);
+  }
+});
+
+async function run(fetchFn, stages) {
+  hideErr(); hideResult(); showLoader(stages[0]);
+  let i = 0;
+  const iv = setInterval(() => { i = Math.min(i+1, stages.length-1); document.getElementById('loader-text').textContent = stages[i]; }, 4500);
+  try {
+    const r = await fetchFn(); clearInterval(iv);
+    if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error||`HTTP ${r.status}`); }
+    currentResult = await r.json();
+    hideLoader(); render(currentResult);
+  } catch(e) { clearInterval(iv); hideLoader(); showErr(e.message); }
+}
+
+function render(d) {
+  const m = d.meeting||{};
+  document.getElementById('r-title').textContent = m.title || 'Совещание';
+
+  const badges = document.getElementById('r-badges');
+  badges.innerHTML = '';
+  if (d.sentiment) {
+    const dc = {Конструктивная:'ok',Позитивная:'ok',Напряжённая:'bad'}[d.sentiment]||'';
+    badges.innerHTML += `<div class="badge"><span class="dot dot-${dc}"></span>${esc(d.sentiment)}</div>`;
+  }
+
+  const parts = m.participants||[];
+  if (parts.length) {
+    document.getElementById('r-par').innerHTML = parts.map(p =>
+      `<div class="participant"><span class="p-name">${esc(p.name||'')}</span>${p.role?`<span class="p-role">${esc(p.role)}</span>`:''}</div>`
+    ).join('');
+    show('s-par');
+  }
+
+  if (d.summary) {
+    document.getElementById('r-sum').textContent = d.summary;
+    if (d.next_meeting) document.getElementById('r-next').innerHTML = `<div style="margin-top:8px;font-size:12px;color:#aaa">📅 ${esc(d.next_meeting)}</div>`;
+    show('s-sum');
+  }
+
+  const kw = d.keywords||[];
+  if (kw.length) { document.getElementById('r-kw').innerHTML = kw.map(k=>`<span class="kw">${esc(k)}</span>`).join(''); show('s-kw'); }
+
+  const dec = d.decisions||[];
+  if (dec.length) { document.getElementById('r-dec').innerHTML = dec.map(x=>`<li>${esc(x)}</li>`).join(''); show('s-dec'); }
+
+  const tasks = d.tasks||[];
+  if (tasks.length) {
+    document.getElementById('r-tasks').innerHTML = tasks.map(t => {
+      const pc = {Высокий:'h',Средний:'m',Низкий:'l'}[t.priority]||'';
+      return `<div class="task"><div><div class="t-text">${esc(t.task||'')}</div><div class="t-meta">${t.assignee?`<span>👤 ${esc(t.assignee)}</span>`:''}${t.deadline?`<span>📅 ${esc(t.deadline)}</span>`:''}</div></div>${t.priority?`<span class="prio prio-${pc}">${esc(t.priority)}</span>`:''}</div>`;
+    }).join('');
+    show('s-tasks');
+  }
+
+  const con = d.contacts||[];
+  if (con.length) {
+    document.getElementById('r-con').innerHTML = con.map(c => {
+      const det = [c.position,c.email,c.phone].filter(Boolean).join(' · ');
+      return `<div class="contact"><span class="c-name">${esc(c.name||'')}</span>${det?` <span class="c-detail">— ${esc(det)}</span>`:''}`;
+    }).join('');
+    show('s-con');
+  }
+
+  if (d.transcript) { document.getElementById('r-tr').textContent = d.transcript; show('s-tr'); }
+
+  document.getElementById('result').classList.add('show');
+  setTimeout(() => document.getElementById('result').scrollIntoView({behavior:'smooth',block:'start'}), 100);
+}
+
+document.getElementById('tr-toggle').addEventListener('click', function() {
+  this.classList.toggle('open');
+  document.getElementById('r-tr').classList.toggle('show');
+});
+
+document.getElementById('dl-btn').addEventListener('click', async () => {
+  if (!currentResult) return;
+  const r = await fetch(`${API}/export_word`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(currentResult)});
+  if (!r.ok) return;
+  const blob = await r.blob();
+  const a = document.createElement('a');
+  const cd = r.headers.get('Content-Disposition')||'';
+  const m2 = cd.match(/filename="?([^"]+)"?/);
+  a.download = m2?m2[1]:'protocol.docx'; a.href = URL.createObjectURL(blob); a.click();
+});
+
+function show(id) { document.getElementById(id)?.classList.add('show'); }
+function showLoader(t) { document.getElementById('loader-text').textContent = t; document.getElementById('loader').classList.add('show'); document.getElementById('submit').style.display = 'none'; }
+function hideLoader() { document.getElementById('loader').classList.remove('show'); document.getElementById('submit').style.display = ''; }
+function showErr(msg) { const e=document.getElementById('err'); e.textContent=msg; e.classList.add('show'); }
+function hideErr() { document.getElementById('err').classList.remove('show'); }
+function hideResult() {
+  document.getElementById('result').classList.remove('show');
+  ['s-par','s-sum','s-kw','s-dec','s-tasks','s-con','s-tr'].forEach(id => document.getElementById(id)?.classList.remove('show'));
+  document.getElementById('r-tr').classList.remove('show');
+  document.getElementById('tr-toggle').classList.remove('open');
+  document.getElementById('r-next').innerHTML='';
+}
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+</script>
+</body>
+</html>
